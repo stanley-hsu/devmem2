@@ -20,7 +20,7 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
@@ -38,26 +38,30 @@
 #include <termios.h>
 #include <sys/types.h>
 #include <sys/mman.h>
-  
+
 #define FATAL do { fprintf(stderr, "Error at line %d, file %s (%d) [%s]\n", \
   __LINE__, __FILE__, errno, strerror(errno)); exit(1); } while(0)
- 
+
 #define MAP_SIZE 4096UL
 #define MAP_MASK (MAP_SIZE - 1)
 
-/* some how, 4KB memcpy is wired */
-#define BUFF_SIZE_DW (64/sizeof(unsigned long))
+#define CACHE_LINE_SIZE 64
+#define CACHE_LINE_MASK (~(CACHE_LINE_SIZE - 1))
 
-unsigned long tx_buff[BUFF_SIZE_DW];
-unsigned long rx_buff[BUFF_SIZE_DW];
+#define FAKE_MAP
+
+/* some how, 4KB memcpy is wired */
+#define BUFF_SIZE_DW (CACHE_LINE_SIZE/sizeof(unsigned long))
 
 int main(int argc, char **argv) {
-    int fd;
-    void *map_base, *virt_addr; 
-	unsigned long read_result, writeval;
+	int fd;
+	void *map_base, *virt_addr;
+	unsigned long writeval;
+	unsigned long read_result[BUFF_SIZE_DW], writevalues[BUFF_SIZE_DW];
 	off_t target;
 	int access_type = 'w';
-	
+	int i, c;
+
 	if(argc < 2) {
 		fprintf(stderr, "\nUsage:\t%s { address } [ type [ data ] ]\n"
 			"\taddress : memory address to act upon\n"
@@ -66,95 +70,116 @@ int main(int argc, char **argv) {
 			argv[0]);
 		exit(1);
 	}
-	target = strtoul(argv[1], 0, 0);
 
+	target = strtoul(argv[1], 0, 0);
 	if(argc > 2)
 		access_type = tolower(argv[2][0]);
 
+#if defined(FAKE_MAP)
+	printf("\nTEST mode: use fake memory\n");
+	map_base = malloc(MAP_SIZE);
+	if (!map_base) {
+		fprintf(stderr, "No memory available\n");
+		exit(1);
+	}
+	for (i = 0; i < MAP_SIZE / sizeof(unsigned short); i++) {
+		*((unsigned short *)(map_base) + i) = i;
+	}
+#else
+	if((fd = open("/dev/mem", O_RDWR | O_SYNC)) == -1) FATAL;
+	printf("/dev/mem opened.\n");
+	fflush(stdout);
 
-    if((fd = open("/dev/mem", O_RDWR | O_SYNC)) == -1) FATAL;
-    printf("/dev/mem opened.\n"); 
-    fflush(stdout);
-    
-    /* Map one page */
-    map_base = mmap(0, MAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, target & ~MAP_MASK);
-    if(map_base == (void *) -1) FATAL;
-    printf("Memory mapped at address %p.\n", map_base); 
-    fflush(stdout);
-    
-    virt_addr = map_base + (target & MAP_MASK);
-    switch(access_type) {
+	/* Map one page */
+	map_base = mmap(0, MAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, target & ~MAP_MASK);
+	if(map_base == (void *) -1) FATAL;
+	printf("Memory mapped at address %p.\n", map_base);
+	fflush(stdout);
+#endif
+	virt_addr = map_base + (target & MAP_MASK);
+	c = 1;
+	switch(access_type) {
 		case 'b':
-			read_result = *((unsigned char *) virt_addr);
+			read_result[0] = *((unsigned char *) virt_addr);
 			break;
 		case 'h':
-			read_result = *((unsigned short *) virt_addr);
+			read_result[0] = *((unsigned short *) virt_addr);
 			break;
 		case 'w':
-			read_result = *((unsigned long *) virt_addr);
+			read_result[0] = *((unsigned long *) virt_addr);
+			break;
+		case 'c':
+			virt_addr = map_base + ((target & MAP_MASK) & CACHE_LINE_MASK);
+			for (i = 0; i < BUFF_SIZE_DW; i++) {
+				read_result[i] = *(((unsigned long *) virt_addr) + i);
+			}
+			c = BUFF_SIZE_DW;
 			break;
 		default:
 			fprintf(stderr, "Illegal data type '%c'.\n", access_type);
 			exit(2);
 	}
-    printf("Value at address 0x%lx (%p): 0x%lx\n", target, virt_addr, read_result); 
-    fflush(stdout);
+	for (i = 0; i < c; i++) {
+		printf("Value at address 0x%lx (%p): 0x%lx\n", target, virt_addr + i * sizeof(unsigned long), read_result[i]);
+	}
+	fflush(stdout);
 
 	if(argc > 3) {
 		writeval = strtoul(argv[3], 0, 0);
-		unsigned int count = 1;
-		if (argc > 4) {
-			count = strtoul(argv[4], 0, 0);
-		}
 		switch(access_type) {
 			case 'b':
 				*((unsigned char *) virt_addr) = writeval;
-				read_result = *((unsigned char *) virt_addr);
-				printf("Written 0x%lx; readback 0x%lx\n", writeval, read_result); 
+				read_result[0] = *((unsigned char *) virt_addr);
+				printf("Written 0x%lx; readback 0x%lx\n", writeval, read_result[0]);
 				break;
 			case 'h':
 				*((unsigned short *) virt_addr) = writeval;
-				read_result = *((unsigned short *) virt_addr);
-				printf("Written 0x%lx; readback 0x%lx\n", writeval, read_result); 
+				read_result[0] = *((unsigned short *) virt_addr);
+				printf("Written 0x%lx; readback 0x%lx\n", writeval, read_result[0]);
 				break;
 			case 'w':
-			{
-				unsigned int i;
-				unsigned int idx;
-				unsigned int byte_length = sizeof(unsigned long)*count;
-				printf("Write from %p to %p %u words\n", virt_addr, virt_addr + byte_length, count);
-				for (i = 0, idx = 0; i < count; i++) {
-					tx_buff[idx++] = writeval + i;
-					if (idx == BUFF_SIZE_DW || i == count - 1) {
-						byte_length = idx * sizeof(unsigned long);
-						printf("Write %p %d bytes\n", virt_addr, byte_length);
-						memcpy(virt_addr, tx_buff, byte_length);
-						idx = 0;
-						virt_addr += byte_length;
-					}
+				*((unsigned long *) virt_addr) = writeval;
+				read_result[0] = *((unsigned long *) virt_addr);
+				printf("Written 0x%lx; readback 0x%lx\n", writeval, read_result[0]);
+				break;
+			case 'c':
+#define write_cache_value_setup(type, value_array, value)	\
+	type *write_data = (type *) &value_array;				\
+	for (i = 0; i < CACHE_LINE_SIZE / sizeof(type); i++) {	\
+		write_data[i] = (type)value + i;				\
+	}
+				if (writeval <= 0xFFFF) {
+					write_cache_value_setup(unsigned short, writevalues, writeval);
+				} else if (writeval <= 0xFFFFFFFF) {
+					write_cache_value_setup(unsigned int, writevalues, writeval);
+				} else {
+					write_cache_value_setup(unsigned long, writevalues, writeval);
 				}
-				//read back
-				virt_addr = map_base + (target & MAP_MASK);
-				for (i = 0; i < count; i+=BUFF_SIZE_DW) {
-					byte_length = BUFF_SIZE_DW * sizeof(unsigned long);
-					printf("Read %p %d bytes\n", virt_addr, byte_length);
-					memcpy(rx_buff, virt_addr, byte_length);
-					virt_addr += byte_length;
-					for (idx = 0; idx < BUFF_SIZE_DW && idx+i < count; ++idx) {
-						if (rx_buff[idx] != writeval + i + idx) {
-							printf("Address=0x%lx expected 0x%lx actual 0x%lx\n", target + sizeof(unsigned long)*(i+idx),
-								   writeval + i + idx, rx_buff[idx]);
-						}
+				memcpy(virt_addr, writevalues, CACHE_LINE_SIZE);
+				for (i = 0; i < BUFF_SIZE_DW; i++) {
+					read_result[i] = *(((unsigned long *) virt_addr) + i);
+				}
+				for (i = 0; i < BUFF_SIZE_DW; i++) {
+					printf("Value at address 0x%lx (%p): Written 0x%lx readback 0x%lx",
+						target, virt_addr + i * sizeof(unsigned long), writevalues[i], read_result[i]);
+
+					if (read_result[i] == writevalues[i]) {
+						printf("\n");
+					} else {
+						printf(", mismatch\n");
 					}
 				}
 				break;
-			}
 		}
 		fflush(stdout);
 	}
-	
+
+#if defined(FAKE_MAP)
+	free(map_base);
+#else
 	if(munmap(map_base, MAP_SIZE) == -1) FATAL;
-    close(fd);
-    return 0;
+	close(fd);
+#endif
+	return 0;
 }
 
