@@ -48,7 +48,7 @@
 #define CACHE_LINE_SIZE 64
 #define CACHE_LINE_MASK (~(CACHE_LINE_SIZE - 1))
 
-#define FAKE_MAP
+//#define FAKE_MAP
 
 /* some how, 4KB memcpy is wired */
 #define BUFF_SIZE_DW (CACHE_LINE_SIZE/sizeof(unsigned long))
