@@ -20,7 +20,7 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
@@ -38,20 +38,20 @@
 #include <termios.h>
 #include <sys/types.h>
 #include <sys/mman.h>
-  
+
 #define FATAL do { fprintf(stderr, "Error at line %d, file %s (%d) [%s]\n", \
   __LINE__, __FILE__, errno, strerror(errno)); exit(1); } while(0)
- 
+
 #define MAP_SIZE 4096UL
 #define MAP_MASK (MAP_SIZE - 1)
 
 int main(int argc, char **argv) {
-    int fd;
-    void *map_base, *virt_addr; 
+	int fd;
+	void *map_base, *virt_addr;
 	unsigned long read_result, writeval;
 	off_t target;
 	int access_type = 'w';
-	
+
 	if(argc < 2) {
 		fprintf(stderr, "\nUsage:\t%s { address } [ type [ data ] ]\n"
 			"\taddress : memory address to act upon\n"
@@ -66,18 +66,18 @@ int main(int argc, char **argv) {
 		access_type = tolower(argv[2][0]);
 
 
-    if((fd = open("/dev/mem", O_RDWR | O_SYNC)) == -1) FATAL;
-    printf("/dev/mem opened.\n"); 
-    fflush(stdout);
-    
-    /* Map one page */
-    map_base = mmap(0, MAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, target & ~MAP_MASK);
-    if(map_base == (void *) -1) FATAL;
-    printf("Memory mapped at address %p.\n", map_base); 
-    fflush(stdout);
-    
-    virt_addr = map_base + (target & MAP_MASK);
-    switch(access_type) {
+	if((fd = open("/dev/mem", O_RDWR | O_SYNC)) == -1) FATAL;
+	printf("/dev/mem opened.\n");
+	fflush(stdout);
+
+	/* Map one page */
+	map_base = mmap(0, MAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, target & ~MAP_MASK);
+	if(map_base == (void *) -1) FATAL;
+	printf("Memory mapped at address %p.\n", map_base);
+	fflush(stdout);
+
+	virt_addr = map_base + (target & MAP_MASK);
+	switch(access_type) {
 		case 'b':
 			read_result = *((unsigned char *) virt_addr);
 			break;
@@ -91,8 +91,8 @@ int main(int argc, char **argv) {
 			fprintf(stderr, "Illegal data type '%c'.\n", access_type);
 			exit(2);
 	}
-    printf("Value at address 0x%X (%p): 0x%X\n", target, virt_addr, read_result); 
-    fflush(stdout);
+	printf("Value at address 0x%X (%p): 0x%X\n", target, virt_addr, read_result);
+	fflush(stdout);
 
 	if(argc > 3) {
 		writeval = strtoul(argv[3], 0, 0);
@@ -110,12 +110,12 @@ int main(int argc, char **argv) {
 				read_result = *((unsigned long *) virt_addr);
 				break;
 		}
-		printf("Written 0x%X; readback 0x%X\n", writeval, read_result); 
+		printf("Written 0x%X; readback 0x%X\n", writeval, read_result);
 		fflush(stdout);
 	}
-	
+
 	if(munmap(map_base, MAP_SIZE) == -1) FATAL;
-    close(fd);
-    return 0;
+	close(fd);
+	return 0;
 }
 
